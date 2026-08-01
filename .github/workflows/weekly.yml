@@ -1,0 +1,41 @@
+name: weekly-awards
+
+on:
+  schedule:
+    - cron: "0 5 * * 1"        # Mondays 05:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  awards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install requests psycopg2-binary python-dotenv tqdm
+      - name: Extract award winners
+        run: python extract_awards_xml.py --niche green
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Normalize companies
+        run: python normalize.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Normalize buyers
+        run: python normalize_buyers.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Enrich companies (GLEIF)
+        run: python enrich_companies.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Fill contract end dates
+        run: python add_contract_end.py --niche green
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Reclassify (relevance + sub-sectors)
+        run: python reclassify.py --niche green --apply
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}

@@ -1,8 +1,10 @@
-name: Daily data refresh
+name: daily-refresh
+
 on:
   schedule:
-    - cron: "0 6 * * *"       # 06:00 UTC every day
-  workflow_dispatch: {}         # adds a manual "Run workflow" button
+    - cron: "0 6 * * *"        # 06:00 UTC daily
+  workflow_dispatch: {}
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
@@ -11,12 +13,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install requests psycopg2-binary python-dotenv tqdm
-      - name: Ingest new notices
+      - name: Install deps
+        run: pip install requests psycopg2-binary python-dotenv tqdm
+      - name: Ingest new tenders (last 3 days)
         run: python ingest.py --niche green --days 3
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      - name: Enrich new lots
+      - name: Enrich tenders (lots, regions, value)
         run: python enrich_tenders_xml.py --niche green
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Reclassify (relevance + sub-sectors)
+        run: python reclassify.py --niche green --apply
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
