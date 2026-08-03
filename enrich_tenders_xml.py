@@ -77,7 +77,9 @@ def main():
     classify = core.make_classifier(niche["subsector_rules"])
 
     conn = core.get_conn(); cur = conn.cursor()
-    cur.execute("SELECT publication_number FROM tenders WHERE niche=%s ORDER BY publication_date DESC", (args.niche,))
+    cur.execute("""SELECT publication_number FROM tenders
+                   WHERE niche=%s AND publication_number NOT IN (SELECT publication_number FROM lots)
+                   ORDER BY publication_date DESC""", (args.niche,))
     pubs = [r[0] for r in cur.fetchall()]
     if args.limit: pubs = pubs[:args.limit]
     print(len(pubs), "notices for niche", args.niche)

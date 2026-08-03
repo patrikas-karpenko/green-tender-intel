@@ -11,6 +11,11 @@ LEGAL_SUFFIXES = ["sp z o o", "sp zoo", "s a", "s p a", "gmbh", "ag", "ltd",
                   "nv", "n v", "sarl", "s l", "sl", "spa", "plc", "sp k", "sp j",
                   "d o o", "a e b e", "aebe", "s r o", "sro"]
 
+# enrichment columns that get added by enrich_companies.py / build_groups.py and
+# must SURVIVE a rebuild (group_id is deliberately excluded — rebuild groups after).
+ENRICH_COLS = ["website", "lei", "registered_as", "gleif_status", "city",
+               "parent_name", "is_subsidiary"]
+
 def norm_name(name):
     s = (name or "").lower()
     s = re.sub(r"[^a-z0-9 ]", " ", s)     # drop punctuation
@@ -23,6 +28,14 @@ def norm_name(name):
                 s = s[:-len(suf)].strip()
                 changed = True
     return s
+
+def keys_for(name, oid):
+    """Stable keys for matching a company across a rebuild: id first, then name."""
+    ks = []
+    if oid and str(oid).strip():
+        ks.append(f"id:{str(oid).strip()}")
+    ks.append(f"name:{norm_name(name)}")
+    return ks
 
 def get_company(cur, name, oid, country):
     """Find-or-create a company, matching on ID key OR name key, and register
@@ -59,7 +72,24 @@ def get_company(cur, name, oid, country):
 conn = psycopg2.connect(os.environ["DATABASE_URL"])
 cur = conn.cursor()
 
-# reset the company layer (awards + tenders untouched), then rebuild cleanly
+# --- 1. SNAPSHOT existing enrichment before we wipe the company layer ---
+cur.execute("""SELECT column_name FROM information_schema.columns
+               WHERE table_schema='public' AND table_name='companies'""")
+present = {r[0] for r in cur.fetchall()}
+enrich_cols = [c for c in ENRICH_COLS if c in present]
+
+snapshot = {}      # stable_key -> {col: value}
+if enrich_cols:
+    cur.execute(f"SELECT canonical_name, official_id, {', '.join(enrich_cols)} FROM companies")
+    for row in cur.fetchall():
+        cname, oid, vals = row[0], row[1], dict(zip(enrich_cols, row[2:]))
+        if not any(v is not None for v in vals.values()):
+            continue                       # nothing to preserve for this row
+        for k in keys_for(cname, oid):
+            snapshot.setdefault(k, vals)
+print(f"Snapshotted enrichment for {len(snapshot)} keys across {len(enrich_cols)} columns.")
+
+# --- 2. reset the company layer (awards + tenders untouched), then rebuild cleanly ---
 cur.execute("UPDATE awards SET company_id = NULL")
 cur.execute("DELETE FROM company_aliases")
 cur.execute("DELETE FROM companies")
@@ -78,6 +108,23 @@ for name, oid, country in tqdm(winners, desc="normalizing..."):
            WHERE winner_name_raw = %s
              AND COALESCE(winner_official_id,'') = COALESCE(%s,'')""",
         (company_id, name, oid))
+
+# --- 3. RE-ATTACH the snapshotted enrichment to the rebuilt companies ---
+restored = 0
+if snapshot and enrich_cols:
+    cur.execute("SELECT id, canonical_name, official_id FROM companies")
+    for cid, cname, oid in tqdm(cur.fetchall(), desc="restoring enrichment"):
+        vals = next((snapshot[k] for k in keys_for(cname, oid) if k in snapshot), None)
+        if not vals:
+            continue
+        set_cols = [c for c in enrich_cols if vals.get(c) is not None]
+        if not set_cols:
+            continue
+        clause = ", ".join(f"{c}=%s" for c in set_cols)
+        cur.execute(f"UPDATE companies SET {clause} WHERE id=%s",
+                    [vals[c] for c in set_cols] + [cid])
+        restored += 1
+print(f"Restored enrichment on {restored} companies.")
 
 conn.commit()
 cur.execute("SELECT count(*) FROM companies")
