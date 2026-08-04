@@ -1,41 +1,41 @@
 name: weekly-awards
-
 on:
   schedule:
-    - cron: "0 5 * * 1"        # Mondays 05:00 UTC
+    - cron: "0 3 * * 0"        # Sundays 03:00 UTC
   workflow_dispatch: {}
-
+concurrency:
+  group: green-pipeline
+  cancel-in-progress: false
 jobs:
   awards:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+        with: { python-version: "3.12" }
       - name: Install deps
         run: pip install requests psycopg2-binary python-dotenv tqdm
       - name: Extract award winners
         run: python extract_awards_xml.py --niche green
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      - name: Normalize companies
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+      - name: Normalize companies (enrichment preserved)
         run: python normalize.py
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
       - name: Normalize buyers
         run: python normalize_buyers.py
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
       - name: Enrich companies (GLEIF)
         run: python enrich_companies.py
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+      - name: Flag fat-finger values
+        run: python flag_values.py --apply
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
       - name: Fill contract end dates
         run: python add_contract_end.py --niche green
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      - name: Reclassify (relevance + sub-sectors)
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+      - name: Reclassify lots
         run: python reclassify.py --niche green --apply
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+      - name: Rebuild corporate groups
+        run: python build_groups.py --apply
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
